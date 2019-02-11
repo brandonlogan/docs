@@ -207,6 +207,7 @@ This simulates 2 hypervisors with 2 VMs each.  1 VM on each hypervisor is on the
 ### VM 1
 VM 1 has an IP address of 192.168.122.147 on enp1s0 device.  It will set up the vtep on interface enp1s0 and remote ip to VM 2 which has an IP of 192.168.122.193
 ```
+VM1_IP=192.168.122.147
 VM2_IP=192.168.122.193
 sudo ip netns add vm1
 sudo ip link add veth-vm1 type veth peer name veth-vm1-ns
@@ -230,7 +231,7 @@ sudo ovs-vsctl add-br br0
 sudo ovs-vsctl add-port br0 veth-vm1
 sudo ovs-vsctl add-port br0 veth-vm2
 
-sudo ovs-vsctl add-port br0 enp1s0 -- set interface enp1s0 type=vxlan option:remote_ip=$VM2_IP option:key=flow ofport_request=10
+sudo ovs-vsctl add-port br0 vtep -- set interface vtep type=vxlan option:remote_ip=$VM2_IP option:local_ip=$VM1_IP option:key=flow ofport_request=10
 
 sudo ovs-ofctl add-flow br0 "table=0,in_port=veth-vm1,actions=set_field:100->tun_id,resubmit(,1)"
 sudo ovs-ofctl add-flow br0 "table=0,in_port=veth-vm2,actions=set_field:200->tun_id,resubmit(,1)"
@@ -252,6 +253,7 @@ sudo ovs-ofctl add-flow br0 "table=1,priority=100,actions=drop"
 VM 2 has an IP address of 192.168.122.193 on enp1s0 device.  It will set up the vtep on interface enp1s0 and remote ip to VM 1 which has an IP of 192.168.122.147
 ```
 VM1_IP=192.168.122.147
+VM2_IP=192.168.122.193
 sudo ip netns add vm3
 sudo ip link add veth-vm3 type veth peer name veth-vm3-ns
 sudo ip link set dev veth-vm3-ns address 00:00:00:00:00:03
@@ -274,7 +276,7 @@ sudo ovs-vsctl add-br br0
 sudo ovs-vsctl add-port br0 veth-vm3
 sudo ovs-vsctl add-port br0 veth-vm4
 
-sudo ovs-vsctl add-port br0 enp1s0 -- set interface enp1s0 type=vxlan option:remote_ip=$VM1_IP option:key=flow ofport_request=10
+sudo ovs-vsctl add-port br0 vtep -- set interface vtep type=vxlan option:remote_ip=$VM1_IP option:key=flow option:local_ip=$VM2_IP ofport_request=10
 
 sudo ovs-ofctl add-flow br0 "table=0,in_port=veth-vm3,actions=set_field:100->tun_id,resubmit(,1)"
 sudo ovs-ofctl add-flow br0 "table=0,in_port=veth-vm4,actions=set_field:200->tun_id,resubmit(,1)"
