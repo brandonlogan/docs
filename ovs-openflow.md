@@ -1,3 +1,22 @@
+# OVS and Openflow Exercises
+
+## Create VM via virt-install
+
+```
+virt-install \
+-n net-testing \
+--os-type=Linux \
+--os-variant=ubuntu18.04 \
+--ram=2048 \
+--vcpus=2 \
+--disk path=/var/lib/libvirt/images/net-testing.img,bus=virtio,size=10 \
+--graphics none \
+--console pty,target_type=serial \
+--location http://archive.ubuntu.com/ubuntu/dists/bionic/main/installer-amd64/ \
+--network bridge:virbr0 \
+--extra-args 'console=ttyS0,115200n8 serial'
+```
+
 ## Network Namespaces connected via OVS Bridge
 
 ### Create network namespaces with veth pairs
@@ -181,3 +200,93 @@ The first rule matches any ip traffic with the destination of vm2 and sets the e
 The second rule is just the same thing for vm1.
 
 Now pings should work!
+
+## VxLAN
+This simulates 2 hypervisors with 2 VMs each.  1 VM on each hypervisor is on the same segment with VNI 100 and 200.
+
+### VM 1
+VM 1 has an IP address of 192.168.122.147 on enp1s0 device.  It will set up the vtep on interface enp1s0 and remote ip to VM 2 which has an IP of 192.168.122.193
+```
+VM2_IP=192.168.122.193
+sudo ip netns add vm1
+sudo ip link add veth-vm1 type veth peer name veth-vm1-ns
+sudo ip link set dev veth-vm1-ns address 00:00:00:00:00:01
+sudo ip link set veth-vm1-ns netns vm1
+sudo ip netns exec vm1 ip addr add 10.0.0.1/24 dev veth-vm1-ns
+sudo ip netns exec vm1 ip link set veth-vm1-ns up
+sudo ip netns exec vm1 ip link set lo up
+sudo ip link set veth-vm1 up
+
+sudo ip netns add vm2
+sudo ip link add veth-vm2 type veth peer name veth-vm2-ns
+sudo ip link set dev veth-vm2-ns address 00:00:00:00:00:02
+sudo ip link set veth-vm2-ns netns vm2
+sudo ip netns exec vm2 ip addr add 10.0.0.2/24 dev veth-vm2-ns
+sudo ip netns exec vm2 ip link set veth-vm2-ns up
+sudo ip netns exec vm2 ip link set lo up
+sudo ip link set veth-vm2 up
+
+sudo ovs-vsctl add-br br0
+sudo ovs-vsctl add-port br0 veth-vm1
+sudo ovs-vsctl add-port br0 veth-vm2
+
+sudo ovs-vsctl add-port br0 enp1s0 -- set interface enp1s0 type=vxlan option:remote_ip=$VM2_IP option:key=flow ofport_request=10
+
+sudo ovs-ofctl add-flow br0 "table=0,in_port=veth-vm1,actions=set_field:100->tun_id,resubmit(,1)"
+sudo ovs-ofctl add-flow br0 "table=0,in_port=veth-vm2,actions=set_field:200->tun_id,resubmit(,1)"
+sudo ovs-ofctl add-flow br0 "table=0,actions=resubmit(,1)"
+
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=100,dl_dst=00:00:00:00:00:01,actions=output:1"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=200,dl_dst=00:00:00:00:00:02,actions=output:2"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=100,dl_dst=00:00:00:00:00:03,actions=output:10"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=200,dl_dst=00:00:00:00:00:04,actions=output:10"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=100,arp,nw_dst=10.0.0.1,actions=output:1"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=200,arp,nw_dst=10.0.0.2,actions=output:2"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=100,arp,nw_dst=10.0.0.3,actions=output:10"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=200,arp,nw_dst=10.0.0.4,actions=output:10"
+sudo ovs-ofctl add-flow br0 "table=1,priority=100,actions=drop"
+```
+
+
+### VM 2
+VM 2 has an IP address of 192.168.122.193 on enp1s0 device.  It will set up the vtep on interface enp1s0 and remote ip to VM 1 which has an IP of 192.168.122.147
+```
+VM1_IP=192.168.122.147
+sudo ip netns add vm3
+sudo ip link add veth-vm3 type veth peer name veth-vm3-ns
+sudo ip link set dev veth-vm3-ns address 00:00:00:00:00:03
+sudo ip link set veth-vm3-ns netns vm3
+sudo ip netns exec vm3 ip addr add 10.0.0.3/24 dev veth-vm3-ns
+sudo ip netns exec vm3 ip link set veth-vm3-ns up
+sudo ip netns exec vm3 ip link set lo up
+sudo ip link set veth-vm3 up
+
+sudo ip netns add vm4
+sudo ip link add veth-vm4 type veth peer name veth-vm4-ns
+sudo ip link set dev veth-vm4-ns address 00:00:00:00:00:04
+sudo ip link set veth-vm4-ns netns vm4
+sudo ip netns exec vm4 ip addr add 10.0.0.4/24 dev veth-vm4-ns
+sudo ip netns exec vm4 ip link set veth-vm4-ns up
+sudo ip netns exec vm4 ip link set lo up
+sudo ip link set veth-vm4 up
+
+sudo ovs-vsctl add-br br0
+sudo ovs-vsctl add-port br0 veth-vm3
+sudo ovs-vsctl add-port br0 veth-vm4
+
+sudo ovs-vsctl add-port br0 enp1s0 -- set interface enp1s0 type=vxlan option:remote_ip=$VM1_IP option:key=flow ofport_request=10
+
+sudo ovs-ofctl add-flow br0 "table=0,in_port=veth-vm3,actions=set_field:100->tun_id,resubmit(,1)"
+sudo ovs-ofctl add-flow br0 "table=0,in_port=veth-vm4,actions=set_field:200->tun_id,resubmit(,1)"
+sudo ovs-ofctl add-flow br0 "table=0,actions=resubmit(,1)"
+
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=100,dl_dst=00:00:00:00:00:03,actions=output:1"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=200,dl_dst=00:00:00:00:00:04,actions=output:2"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=100,dl_dst=00:00:00:00:00:01,actions=output:10"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=200,dl_dst=00:00:00:00:00:02,actions=output:10"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=100,arp,nw_dst=10.0.0.3,actions=output:1"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=200,arp,nw_dst=10.0.0.4,actions=output:2"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=100,arp,nw_dst=10.0.0.1,actions=output:10"
+sudo ovs-ofctl add-flow br0 "table=1,tun_id=200,arp,nw_dst=10.0.0.2,actions=output:10"
+sudo ovs-ofctl add-flow br0 "table=1,priority=100,actions=drop"
+```
