@@ -17,6 +17,15 @@ virt-install \
 --extra-args 'console=ttyS0,115200n8 serial'
 ```
 
+## Install OVS
+I'm install OVS on ubuntu 18.04 and I want OVS 2.10
+
+```
+sudo add-apt-repository cloud-archive:rocky
+sudo apt-get update
+sudo apt-get install openvswitch-switch
+```
+
 ## Network Namespaces connected via OVS Bridge
 
 ### Create network namespaces with veth pairs
@@ -207,8 +216,8 @@ This simulates 2 hypervisors with 2 VMs each.  1 VM on each hypervisor is on the
 ### VM 1
 VM 1 has an IP address of 192.168.122.147 on enp1s0 device.  It will set up the vtep on interface enp1s0 and remote ip to VM 2 which has an IP of 192.168.122.193
 ```
-VM1_IP=192.168.122.147
-VM2_IP=192.168.122.193
+VM1_IP=192.168.122.210
+VM2_IP=192.168.122.216
 sudo ip netns add vm1
 sudo ip link add veth-vm1 type veth peer name veth-vm1-ns
 sudo ip link set dev veth-vm1-ns address 00:00:00:00:00:01
@@ -252,8 +261,8 @@ sudo ovs-ofctl add-flow br0 "table=1,priority=100,actions=drop"
 ### VM 2
 VM 2 has an IP address of 192.168.122.193 on enp1s0 device.  It will set up the vtep on interface enp1s0 and remote ip to VM 1 which has an IP of 192.168.122.147
 ```
-VM1_IP=192.168.122.147
-VM2_IP=192.168.122.193
+VM1_IP=192.168.122.210
+VM2_IP=192.168.122.216
 sudo ip netns add vm3
 sudo ip link add veth-vm3 type veth peer name veth-vm3-ns
 sudo ip link set dev veth-vm3-ns address 00:00:00:00:00:03
@@ -291,4 +300,45 @@ sudo ovs-ofctl add-flow br0 "table=1,tun_id=200,arp,nw_dst=10.0.0.4,actions=outp
 sudo ovs-ofctl add-flow br0 "table=1,tun_id=100,arp,nw_dst=10.0.0.1,actions=output:10"
 sudo ovs-ofctl add-flow br0 "table=1,tun_id=200,arp,nw_dst=10.0.0.2,actions=output:10"
 sudo ovs-ofctl add-flow br0 "table=1,priority=100,actions=drop"
+```
+
+### Rate limiting
+To rate limit we need to create a meter on the bridge.  Unfortunately, we need OVS 2.10 AND linux kernel 4.19 to get OVS to support this.
+
+To set a rate limit of 10 Gbps, the meter needs to be created first.
+
+```
+sudo ovs-ofctl -O OpenFlow13 add-meter br0 meter=100,kbps,band=type=drop,rate=1000000
+sudo ovs-ofctl -O OpenFlow13 dump-meters br0
+```
+
+Outputs
+```
+OFPST_METER_CONFIG reply (OF1.3) (xid=0x2):
+meter=100 kbps bands=
+type=drop rate=10000000
+```
+
+Then the meter needs to be applied to a rule.  We can just replace an existing flow we created above, but this time add the meter as an action.
+
+```
+sudo ovs-ofctl -O OpenFlow13 add-flow br0 "table=1,tun_id=100,dl_dst=00:00:00:00:00:03 actions=meter:100,output:vtep"
+sudo ovs-ofctl -O OpenFlow13 dump-flows br0
+```
+
+Outputs
+```
+ cookie=0x0, duration=429.508s, table=0, n_packets=20, n_bytes=1504, reset_counts in_port="veth-vm1" actions=load:0x64->NXM_NX_TUN_ID[],resubmit(,1)
+ cookie=0x0, duration=429.493s, table=0, n_packets=11, n_bytes=846, reset_counts in_port="veth-vm2" actions=load:0xc8->NXM_NX_TUN_ID[],resubmit(,1)
+ cookie=0x0, duration=429.578s, table=0, n_packets=0, n_bytes=0, priority=0 actions=NORMAL
+ cookie=0x0, duration=429.480s, table=0, n_packets=9, n_bytes=658, reset_counts actions=resubmit(,1)
+ cookie=0x0, duration=429.472s, table=1, n_packets=9, n_bytes=658, reset_counts tun_id=0x64,dl_dst=00:00:00:00:00:01 actions=output:"veth-vm1"
+ cookie=0x0, duration=429.463s, table=1, n_packets=0, n_bytes=0, reset_counts tun_id=0xc8,dl_dst=00:00:00:00:00:02 actions=output:"veth-vm2"
+ cookie=0x0, duration=429.445s, table=1, n_packets=0, n_bytes=0, reset_counts tun_id=0xc8,dl_dst=00:00:00:00:00:04 actions=output:vtep
+ cookie=0x0, duration=44.038s, table=1, n_packets=8, n_bytes=616, tun_id=0x64,dl_dst=00:00:00:00:00:03 actions=meter:100,output:vtep
+ cookie=0x0, duration=429.437s, table=1, n_packets=0, n_bytes=0, reset_counts arp,tun_id=0x64,arp_tpa=10.0.0.1 actions=output:"veth-vm1"
+ cookie=0x0, duration=429.427s, table=1, n_packets=0, n_bytes=0, reset_counts arp,tun_id=0xc8,arp_tpa=10.0.0.2 actions=output:"veth-vm2"
+ cookie=0x0, duration=429.419s, table=1, n_packets=1, n_bytes=42, reset_counts arp,tun_id=0x64,arp_tpa=10.0.0.3 actions=output:vtep
+ cookie=0x0, duration=429.410s, table=1, n_packets=0, n_bytes=0, reset_counts arp,tun_id=0xc8,arp_tpa=10.0.0.4 actions=output:vtep
+ cookie=0x0, duration=428.463s, table=1, n_packets=17, n_bytes=1270, reset_counts priority=100 actions=drop
 ```
